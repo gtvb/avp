@@ -1,8 +1,8 @@
 NAME := ave
 
 CC := gcc
-CFLAGS := -I/opt/homebrew/include -I/raylib/raylib-5.5 -Wall -Wextra
-LDFLAGS := -L/opt/homebrew/lib -lavcodec -lavformat -lavutil -lswscale -lraylib
+CFLAGS := -I/opt/homebrew/include -I./raylib/raylib-5.5/src -Wall -Wextra
+LDFLAGS := -L/opt/homebrew/lib -L./raylib/raylib-5.5/src -lavcodec -lavformat -lavutil -lswscale -lraylib -framework OpenGL -framework Cocoa -framework IOKit -framework CoreAudio -framework CoreVideo
 
 SOURCES := $(wildcard *.c)
 OBJECTS := $(SOURCES:.c=.o)

@@ -1,51 +1,44 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include <SDL2/SDL.h>
+#include "raylib.h"
 
-#define WINDOW_WIDTH 1200
-#define WINDOW_HEIGHT 800
+int main(void)
+{
+    // Initialization
+    //--------------------------------------------------------------------------------------
+    const int screenWidth = 800;
+    const int screenHeight = 450;
 
-int main(int argc, char *argv[]) {
-  SDL_Window *window;
-  SDL_Renderer *renderer;
+    InitWindow(screenWidth, screenHeight, "raylib [core] example - basic window");
 
-  if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-    fprintf(stderr, "Could not init SDL\n");
-    exit(1);
-  }
+    SetTargetFPS(60);               // Set our game to run at 60 frames-per-second
+    //--------------------------------------------------------------------------------------
 
-  if (SDL_CreateWindowAndRenderer(WINDOW_WIDTH, WINDOW_HEIGHT, 0, &window,
-                                  &renderer) < 0) {
-    fprintf(stderr, "could not create sdl window and renderer\n");
-    exit(1);
-  }
+    // Main game loop
+    while (!WindowShouldClose())    // Detect window close button or ESC key
+    {
+        // Update
+        //----------------------------------------------------------------------------------
+        // TODO: Update your variables here
+        //----------------------------------------------------------------------------------
 
-  int running = 1;
+        // Draw
+        //----------------------------------------------------------------------------------
+        BeginDrawing();
 
-  SDL_Event ev;
-  while(running) {
-    // event handling logic and state updates
-    while(SDL_PollEvent(&ev)) {
-      switch(ev.type) {
-        case SDL_QUIT:
-          running = 0;
-          break;
-        case SDL_WINDOWEVENT_CLOSE:
-          running = 0;
-          break;
-        case SDL_KEYDOWN:
-          if(ev.key.keysym.sym == SDLK_ESCAPE) {
-            running = 0;
-          }
-          break;
-      }
+            ClearBackground(RAYWHITE);
+
+            DrawText("Congrats! You created your first window!", 190, 200, 20, LIGHTGRAY);
+
+        EndDrawing();
+        //----------------------------------------------------------------------------------
     }
-  }
 
-  SDL_DestroyRenderer(renderer);
-  SDL_DestroyWindow(window);
-  SDL_Quit();
+    // De-Initialization
+    //--------------------------------------------------------------------------------------
+    CloseWindow();        // Close window and OpenGL context
+    //--------------------------------------------------------------------------------------
 
-  exit(0);
+    return 0;
 }

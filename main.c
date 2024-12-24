@@ -1,44 +1,204 @@
+#include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "media.h"
 #include "raylib.h"
 
-int main(void)
-{
-    // Initialization
-    //--------------------------------------------------------------------------------------
-    const int screenWidth = 800;
-    const int screenHeight = 450;
+#define MAX_MEDIA_QUANTITY 5
 
-    InitWindow(screenWidth, screenHeight, "raylib [core] example - basic window");
+typedef struct EditorState {
+  int video_area_width, video_area_height;
 
-    SetTargetFPS(60);               // Set our game to run at 60 frames-per-second
-    //--------------------------------------------------------------------------------------
+  Media *medias[MAX_MEDIA_QUANTITY];
+  int media_count;
+  int current_media_idx;
+  int current_media_first_frame;
 
-    // Main game loop
-    while (!WindowShouldClose())    // Detect window close button or ESC key
-    {
-        // Update
-        //----------------------------------------------------------------------------------
-        // TODO: Update your variables here
-        //----------------------------------------------------------------------------------
+  int current_media_playing;
+  int current_media_ended;
+  int current_media_reset;
+} EditorState;
 
-        // Draw
-        //----------------------------------------------------------------------------------
-        BeginDrawing();
+EditorState *state_alloc(int video_area_width, int video_area_height) {
+  EditorState *es = (EditorState *)malloc(sizeof(EditorState));
 
-            ClearBackground(RAYWHITE);
+  es->current_media_idx = -1;
+  es->current_media_first_frame = 1;
+  es->current_media_ended = 0;
+  es->current_media_playing = 0;
+  es->current_media_reset = 0;
+  es->media_count = 0;
 
-            DrawText("Congrats! You created your first window!", 190, 200, 20, LIGHTGRAY);
+  es->video_area_width = video_area_width;
+  es->video_area_height = video_area_height;
 
-        EndDrawing();
-        //----------------------------------------------------------------------------------
+  for (int i = 0; i < MAX_MEDIA_QUANTITY; i++) {
+    es->medias[i] = NULL;
+  }
+
+  return es;
+}
+
+int state_load_media(EditorState *es, char *droppedFilename) {
+  Media *m = media_alloc(es->video_area_width, es->video_area_width);
+  if (!m) {
+    return -1;
+  }
+
+  strcpy(m->filename, droppedFilename);
+
+  if (media_init(m) < 0) {
+    return -1;
+  }
+
+  es->medias[es->media_count] = m;
+  es->current_media_idx++;
+  es->media_count++;
+
+  return 0;
+}
+
+void state_free(EditorState *es) {
+  for (int i = 0; i < es->media_count; i++) {
+    if (es->medias[i])
+      media_free(es->medias[i]);
+  }
+
+  free(es);
+}
+
+int main(void) {
+  const int window_width = 1280;
+  const int window_height = 720;
+
+  InitWindow(window_width, window_height, "ave - Another Video Editor");
+
+  Rectangle videoAreaBorder =
+                (Rectangle){.x = (int)(window_width / 3),
+                            .y = 10,
+                            .width = (int)((2 * window_width) / 3) - 20,
+                            .height = window_height - 100},
+            videoArea = (Rectangle){.x = (int)(window_width / 3) + 2,
+                                    .y = 12,
+                                    .width = (int)((2 * window_width) / 3) - 24,
+                                    .height = window_height - 104},
+            playButton =
+                (Rectangle){.x = (int)(window_width / 3 + window_width / 4),
+                            .y = videoAreaBorder.height + 30,
+                            .width = 100,
+                            .height = 35},
+            resetButton =
+                (Rectangle){.x = (int)(window_width / 3 + window_width / 4) +
+                                 playButton.width + 10,
+                            .y = videoAreaBorder.height + 30,
+                            .width = 60,
+                            .height = 35},
+            exportButton =
+                (Rectangle){.x = (int)(window_width / 3 + window_width / 4) +
+                                 resetButton.width + playButton.width + 20,
+                            .y = videoAreaBorder.height + 30,
+                            .width = 110,
+                            .height = 35},
+            mediaArea = (Rectangle){.x = 10,
+                                    .y = 10,
+                                    .width = (int)(window_width / 3) - 20,
+                                    .height = window_height - 20};
+
+  Image img = GenImageColor(videoArea.width, videoArea.height, RAYWHITE);
+  ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+  UnloadImage(img);
+  Texture tex = LoadTextureFromImage(img);
+
+  EditorState *state = state_alloc(videoArea.width, videoArea.height);
+  if (!state) {
+    perror("state_alloc");
+    exit(1);
+  }
+
+  SetTargetFPS(30);
+  while (!WindowShouldClose()) {
+    if (IsFileDropped() && state->media_count + 1 < MAX_MEDIA_QUANTITY) {
+      FilePathList droppedFiles = LoadDroppedFiles();
+      for (int i = 0; i < (int)droppedFiles.count; i++) {
+        state_load_media(state, droppedFiles.paths[i]);
+      }
+
+      UnloadDroppedFiles(droppedFiles);
     }
 
-    // De-Initialization
-    //--------------------------------------------------------------------------------------
-    CloseWindow();        // Close window and OpenGL context
-    //--------------------------------------------------------------------------------------
+    if (CheckCollisionPointRec(GetMousePosition(), playButton)) {
+      state->current_media_playing = !state->current_media_playing;
+    }
 
-    return 0;
+    if (CheckCollisionPointRec(GetMousePosition(), resetButton)) {
+      state->current_media_playing = 0;
+      state->current_media_reset = 1;
+      state->current_media_first_frame = 1;
+    }
+
+    if (IsKeyPressed(KEY_DOWN)) {
+      state->current_media_idx =
+          (state->current_media_idx + 1) % state->media_count;
+      state->current_media_first_frame = 1;
+    }
+
+    if (IsKeyPressed(KEY_UP)) {
+      state->current_media_idx =
+          (state->current_media_idx - 1) % state->media_count;
+      state->current_media_first_frame = 1;
+    }
+
+    BeginDrawing();
+    ClearBackground(RAYWHITE);
+
+    DrawRectangleLinesEx(mediaArea, 2, GRAY);
+    if (state->media_count == 0) {
+      DrawText("Drop media files here!", mediaArea.x + 15, mediaArea.height / 2,
+               25, GRAY);
+    } else {
+      for (int i = 0; i < state->media_count; i++) {
+        DrawRectangle(mediaArea.x, mediaArea.y + 35 * i, mediaArea.width, 35,
+                      i == state->current_media_idx
+                          ? SKYBLUE
+                          : (i % 2 == 0 ? GRAY : LIGHTGRAY));
+        DrawText(basename(state->medias[i]->filename), mediaArea.x + 10,
+                 mediaArea.y + 35 * i, 20,
+                 i == state->current_media_idx ? BLUE : DARKGRAY);
+      }
+    }
+
+    DrawRectangleLinesEx(videoAreaBorder, 2, GRAY);
+    DrawRectangleRec(videoArea, WHITE);
+
+    // If the video is not being played, just update the texture with
+    // the attached picture. If we're playing, do something else
+    if (!state->current_media_playing && state->media_count > 0) {
+      if (state->current_media_first_frame) {
+        TraceLog(LOG_INFO, "Some data %s\n",
+                 state->medias[state->current_media_idx]->attached_pic.data);
+        // UpdateTexture(
+        //     tex, state->medias[state->current_media_idx]->attached_pic.data);
+        state->current_media_first_frame = 0;
+      }
+    }
+
+    DrawTexture(tex, videoArea.x, videoArea.y, WHITE);
+
+    DrawRectangleRec(playButton, LIGHTGRAY);
+    DrawText("Play/Pause", playButton.x + 5, playButton.y + 10, 15, GRAY);
+
+    DrawRectangleRec(resetButton, LIGHTGRAY);
+    DrawText("Reset", resetButton.x + 5, resetButton.y + 10, 15, GRAY);
+
+    DrawRectangleRec(exportButton, LIGHTGRAY);
+    DrawText("Export (.mp4)", exportButton.x + 5, exportButton.y + 10, 15,
+             GRAY);
+
+    EndDrawing();
+  }
+
+  state_free(state);
+  UnloadTexture(tex);
+  CloseWindow();
 }

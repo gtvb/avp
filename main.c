@@ -23,7 +23,7 @@ typedef struct EditorState {
 EditorState *state_alloc(int video_area_width, int video_area_height) {
   EditorState *es = (EditorState *)malloc(sizeof(EditorState));
 
-  es->current_media_idx = -1;
+  es->current_media_idx = 0;
   es->current_media_first_frame = 1;
   es->current_media_ended = 0;
   es->current_media_playing = 0;
@@ -41,7 +41,7 @@ EditorState *state_alloc(int video_area_width, int video_area_height) {
 }
 
 int state_load_media(EditorState *es, char *droppedFilename) {
-  Media *m = media_alloc(es->video_area_width, es->video_area_width);
+  Media *m = media_alloc(es->video_area_width, es->video_area_height);
   if (!m) {
     return -1;
   }
@@ -53,7 +53,6 @@ int state_load_media(EditorState *es, char *droppedFilename) {
   }
 
   es->medias[es->media_count] = m;
-  es->current_media_idx++;
   es->media_count++;
 
   return 0;
@@ -105,10 +104,10 @@ int main(void) {
                                     .width = (int)(window_width / 3) - 20,
                                     .height = window_height - 20};
 
-  Image img = GenImageColor(videoArea.width, videoArea.height, RAYWHITE);
+  Image img = GenImageColor(videoArea.width, videoArea.height, BLACK);
   ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-  UnloadImage(img);
   Texture tex = LoadTextureFromImage(img);
+  UnloadImage(img);
 
   EditorState *state = state_alloc(videoArea.width, videoArea.height);
   if (!state) {
@@ -128,13 +127,19 @@ int main(void) {
     }
 
     if (CheckCollisionPointRec(GetMousePosition(), playButton)) {
-      state->current_media_playing = !state->current_media_playing;
+      if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+        state->current_media_playing = !state->current_media_playing;
+        TraceLog(LOG_INFO, "Playing: %d\n", state->current_media_playing);
+      }
     }
 
     if (CheckCollisionPointRec(GetMousePosition(), resetButton)) {
-      state->current_media_playing = 0;
-      state->current_media_reset = 1;
-      state->current_media_first_frame = 1;
+      if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+        state->current_media_playing = 0;
+        state->current_media_reset = 1;
+        state->current_media_first_frame = 1;
+        TraceLog(LOG_INFO, "Reset: %d\n", state->current_media_reset);
+      }
     }
 
     if (IsKeyPressed(KEY_DOWN)) {
@@ -168,20 +173,33 @@ int main(void) {
       }
     }
 
-    DrawRectangleLinesEx(videoAreaBorder, 2, GRAY);
-    DrawRectangleRec(videoArea, WHITE);
+    if (state->current_media_playing) {
+      if (media_read_frame(state->medias[state->current_media_idx]) < 0) {
+        TraceLog(LOG_ERROR, "Could not read frame\n");
+      };
 
-    // If the video is not being played, just update the texture with
-    // the attached picture. If we're playing, do something else
-    if (!state->current_media_playing && state->media_count > 0) {
-      if (state->current_media_first_frame) {
-        TraceLog(LOG_INFO, "Some data %s\n",
-                 state->medias[state->current_media_idx]->attached_pic.data);
-        // UpdateTexture(
-        //     tex, state->medias[state->current_media_idx]->attached_pic.data);
-        state->current_media_first_frame = 0;
+      int index;
+      if ((index = media_decode_frames(
+               state->medias[state->current_media_idx])) < 0) {
+        TraceLog(LOG_ERROR, "Could not decode frame(s)\n");
+      };
+
+      if (index ==
+          state->medias[state->current_media_idx]->video_stream_index) {
+        UpdateTexture(tex,
+                      state->medias[state->current_media_idx]->frame->data);
+
+        TraceLog(LOG_INFO, "SOme data: %d, %d\n",
+                 state->medias[state->current_media_idx]->frame->data[0][0],
+                 state->medias[state->current_media_idx]->frame->data[0][1]);
+        TraceLog(LOG_INFO, "Got video frame\n");
+      } else {
+        TraceLog(LOG_INFO, "Got audio frame\n");
       }
     }
+
+    DrawRectangleLinesEx(videoAreaBorder, 2, GRAY);
+    DrawRectangleRec(videoArea, WHITE);
 
     DrawTexture(tex, videoArea.x, videoArea.y, WHITE);
 

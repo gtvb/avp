@@ -25,22 +25,15 @@ Media *media_alloc(int video_area_width, int video_area_height) {
 }
 
 // This opens either the audio or the video codec for later use in decoding
-AVCodecContext *media_open_context(Media *media, enum AVMediaType type) {
+int media_open_context(Media *media, AVCodecContext **ctx,
+                       enum AVMediaType type) {
   int ret;
 
   const AVCodec *desired_codec;
   if ((ret = av_find_best_stream(media->fmt_ctx, type, -1, -1, &desired_codec,
                                  0)) < 0) {
-    if (ret == AVERROR_STREAM_NOT_FOUND) {
-      printf("Could not find the desired stream for type\n");
-    }
-
-    if (ret == AVERROR_DECODER_NOT_FOUND) {
-      printf("Could not find the desired decoder for type\n");
-    }
-
     printf("Could not find best stream: %s\n", av_err2str(ret));
-    return NULL;
+    return ret;
   }
 
   // Set the stream index. Might be useful later on
@@ -50,24 +43,24 @@ AVCodecContext *media_open_context(Media *media, enum AVMediaType type) {
     media->audio_stream_index = ret;
   }
 
-  AVCodecContext *ctx = avcodec_alloc_context3(desired_codec);
+  *ctx = avcodec_alloc_context3(desired_codec);
   if (!ctx) {
     printf("Could not allocate context");
-    return NULL;
+    return ret;
   }
 
   if ((ret = avcodec_parameters_to_context(
-           ctx, media->fmt_ctx->streams[ret]->codecpar)) < 0) {
+           *ctx, media->fmt_ctx->streams[ret]->codecpar)) < 0) {
     printf("Could not copy info to context: %s\n", av_err2str(ret));
-    return NULL;
+    return ret;
   }
 
-  if ((ret = avcodec_open2(ctx, desired_codec, NULL)) < 0) {
+  if ((ret = avcodec_open2(*ctx, desired_codec, NULL)) < 0) {
     printf("Could not open context: %s\n", av_err2str(ret));
-    return NULL;
+    return ret;
   }
 
-  return ctx;
+  return 0;
 }
 
 int media_init(Media *media) {
@@ -88,16 +81,15 @@ int media_init(Media *media) {
   av_dump_format(media->fmt_ctx, 0, media->filename, 0);
 
   // Open contexts
-  media->video_codec = media_open_context(media, AVMEDIA_TYPE_VIDEO);
-  if (!media->video_codec) {
+  ret = media_open_context(media, &media->video_codec, AVMEDIA_TYPE_VIDEO);
+  if (ret < 0 && ret != AVERROR_STREAM_NOT_FOUND) {
+    printf("Could not open video context: %s\n", av_err2str(ret));
     return -1;
   }
 
-  media->attached_pic =
-      media->fmt_ctx->streams[media->video_stream_index]->attached_pic;
-
-  media->audio_codec = media_open_context(media, AVMEDIA_TYPE_AUDIO);
-  if (!media->audio_codec) {
+  ret = media_open_context(media, &media->audio_codec, AVMEDIA_TYPE_AUDIO);
+  if (ret < 0 && ret != AVERROR_STREAM_NOT_FOUND) {
+    printf("Could not open audio context: %s\n", av_err2str(ret));
     return -1;
   }
 
@@ -107,10 +99,13 @@ int media_init(Media *media) {
   media->dst_frame->format = AV_PIX_FMT_RGBA;
 
   media->sws_ctx =
-      sws_getContext(media->video_codec->width, media->video_codec->height,
-                     media->video_codec->pix_fmt, media->dst_frame->width,
-                     media->dst_frame->height, media->dst_frame->format,
-                     SWS_BILINEAR, NULL, NULL, 0);
+      media->video_codec
+          ? sws_getContext(media->video_codec->width,
+                           media->video_codec->height,
+                           media->video_codec->pix_fmt, media->dst_frame->width,
+                           media->dst_frame->height, media->dst_frame->format,
+                           SWS_BILINEAR, NULL, NULL, 0)
+          : NULL;
 
   if (!media->sws_ctx) {
     return -1;
@@ -149,11 +144,11 @@ int media_decode_frames(Media *media) {
 
     if (media->pkt->stream_index == media->video_stream_index) {
       // Add video frame to video queue
-      if ((ret = sws_scale_frame(media->sws_ctx, media->dst_frame,
-                                 media->frame)) < 0) {
+      if ((ret = sws_scale_frame(media->sws_ctx, media->dst_frame, media->frame)) < 0) {
 
         printf("Could not scale frame: %s\n", av_err2str(ret));
       };
+
     } else {
       // Add audio frame to audio queue
     }

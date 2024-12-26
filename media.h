@@ -18,8 +18,6 @@ typedef struct Media {
   AVFormatContext *fmt_ctx;
   AVCodecContext *video_codec, *audio_codec;
 
-  struct AVPacket attached_pic;
-
   int video_stream_index, audio_stream_index;
   int video_area_width, video_area_height;
 
@@ -37,7 +35,8 @@ typedef struct Media {
 
 Media *media_alloc(int video_area_width, int video_area_height);
 
-AVCodecContext *media_open_context(Media *media, enum AVMediaType type);
+int media_open_context(Media *media, AVCodecContext **ctx,
+                       enum AVMediaType type);
 int media_init(Media *media);
 int media_read_frame(Media *media);
 int media_decode_frames(Media *media);

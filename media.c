@@ -17,12 +17,7 @@ Media *media_alloc() {
   if (!media->pkt)
     return NULL;
 
-  media->frame = av_frame_alloc();
-  if (!media->frame)
-    return NULL;
-
   media->sws_ctx = NULL;
-  ;
 
   return media;
 }
@@ -30,7 +25,7 @@ Media *media_alloc() {
 int media_open_contexts(Media *media) {
   int ret;
 
-  for (int i = 0; i < media->fmt_ctx->nb_streams; i++) {
+  for (int i = 0; i < (int)media->fmt_ctx->nb_streams; i++) {
     AVStream *stream = media->fmt_ctx->streams[i];
 
     const AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
@@ -63,8 +58,14 @@ int media_open_contexts(Media *media) {
     // This is a helper so we can easily find the most useful streams for now
     if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
       media->video_stream_index = i;
+      media->video_queue = fq_alloc();
+      if (!media->video_queue)
+        return -1;
     } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
       media->audio_stream_index = i;
+      media->audio_queue = fq_alloc();
+      if (!media->audio_queue)
+        return -1;
     }
 
     media->nb_streams++;
@@ -91,6 +92,11 @@ AVCodecContext *media_get_video_ctx(Media *media) {
 
 int media_init(Media *media, int dst_frame_w, int dst_frame_h,
                enum AVPixelFormat dst_frame_fmt) {
+
+  media->dst_frame_w = dst_frame_w;
+  media->dst_frame_h = dst_frame_h;
+  media->dst_frame_fmt = dst_frame_fmt;
+
   int ret;
 
   // Setup the format context with the input info
@@ -130,11 +136,7 @@ int media_init(Media *media, int dst_frame_w, int dst_frame_h,
 }
 
 int media_read_frame(Media *media) {
-  if (av_read_frame(media->fmt_ctx, media->pkt) < 0) {
-    return -1;
-  }
-
-  return 0;
+  return av_read_frame(media->fmt_ctx, media->pkt);
 }
 
 int media_decode_frames(Media *media) {
@@ -148,8 +150,14 @@ int media_decode_frames(Media *media) {
   }
 
   while (ret >= 0) {
-    ret = avcodec_receive_frame(codec, media->frame);
+    AVFrame *frame = av_frame_alloc();
+    if (!frame) {
+      return -1;
+    }
+
+    ret = avcodec_receive_frame(codec, frame);
     if (ret < 0) {
+      av_frame_free(&frame);
       if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN)) {
         return 0;
       }
@@ -157,12 +165,38 @@ int media_decode_frames(Media *media) {
     }
 
     if (media->pkt->stream_index == media->video_stream_index) {
-      // Add video frame to video queue
+      AVFrame *dst_frame = av_frame_alloc();
+      uint8_t *dst_data[4];
+      int dst_linesize[4];
+
+      if (av_image_alloc(dst_data, dst_linesize, media->dst_frame_w,
+                         media->dst_frame_h, media->dst_frame_fmt, 1) < 0) {
+        printf("Failed to allocate image for scaling.\n");
+        return -1;
+      }
+
+      if ((ret = sws_scale(media->sws_ctx, (const uint8_t *const *)frame->data,
+                           frame->linesize, 0, frame->height, dst_data,
+                           dst_linesize)) < 0) {
+        printf("Failed to scale: %s.\n", av_err2str(ret));
+        return -1;
+      };
+
+      // Copy scaled data to dst_frame
+      av_image_copy(dst_frame->data, dst_frame->linesize,
+                    (const uint8_t *const *)dst_data, dst_linesize,
+                    dst_frame->format, dst_frame->width, dst_frame->height);
+
+      printf("Enqueued video frame: %x\n", dst_frame);
+      fq_enqueue(media->video_queue, dst_frame);
+
+      // av_freep(&dst_data[0]);
+      av_frame_free(&frame);
     } else {
       // Add audio frame to audio queue
+      printf("Enqueued audio frame: %x\n", frame);
+      fq_enqueue(media->audio_queue, frame);
     }
-
-    av_frame_unref(media->frame);
   }
 
   return 0;
@@ -171,16 +205,20 @@ int media_decode_frames(Media *media) {
 void media_free(Media *media) {
   avformat_close_input(&media->fmt_ctx);
 
-  sws_freeContext(media->sws_ctx);
   for (int i = 0; i < media->nb_streams; i++) {
     avcodec_free_context(&media->ctxs[i]);
   }
 
   av_packet_free(&media->pkt);
-  av_frame_free(&media->frame);
 
   if (media->sws_ctx)
     sws_freeContext(media->sws_ctx);
+
+  if (media->video_queue)
+    fq_free(media->video_queue);
+
+  if (media->audio_queue)
+    fq_free(media->audio_queue);
 
   free(media);
 }

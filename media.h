@@ -4,6 +4,7 @@
 #ifndef MEDIA_H
 #define MEDIA_H
 
+#include "queue.h"
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
@@ -21,14 +22,16 @@ typedef struct Media {
   AVCodecContext *ctxs[MAX_CONTEXTS];
   AVStream *streams[MAX_CONTEXTS];
 
+  int dst_frame_w, dst_frame_h;
+  enum AVPixelFormat dst_frame_fmt;
+
   // This is an auxiliary variable to read all the frames from the container
   // wheter they are audio or video frames.
   AVPacket *pkt;
 
-  // Frame for reading purposes
-  AVFrame *frame;
-
-  // TODO: Here, we will implement storage for audio and video streams
+  // This is where we receive the decoded frames in order to process them later
+  // on.
+  FrameQueue *video_queue, *audio_queue;
 
   // This is the context that we're gonna use to convert the original pixel
   // format on the frame to the desired format

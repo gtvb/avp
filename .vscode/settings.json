@@ -1,0 +1,10 @@
+{
+    "cmake.ignoreCMakeListsMissing": true,
+    "makefile.launchConfigurations": [
+        {
+            "cwd": "/Users/gabriel/Programming/c/ave",
+            "binaryPath": "/Users/gabriel/Programming/c/ave/ave",
+            "binaryArgs": []
+        }
+    ]
+}

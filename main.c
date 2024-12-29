@@ -5,292 +5,219 @@
 #include "media.h"
 #include "raylib.h"
 
-#define MAX_MEDIA_QUANTITY 5
+#define MAX_MEDIA 10
 
-typedef struct EditorState {
-  int video_area_width, video_area_height;
+typedef struct {
+    int is_playing;
+    int end_of_file;
+    Media *media;
+} MediaStateWrapper;
 
-  Media *medias[MAX_MEDIA_QUANTITY];
-  int media_count;
-  int current_media_idx;
-  int current_media_first_frame;
+typedef struct {
+    int media_count;
+    int current_media_idx;
 
-  int current_media_playing;
-  int current_media_ended;
-  int current_media_reset;
-} EditorState;
+    int video_area_width, video_area_height, video_destination_fmt;
 
-EditorState *state_alloc(int video_area_width, int video_area_height) {
-  EditorState *es = (EditorState *)malloc(sizeof(EditorState));
+    MediaStateWrapper *medias[MAX_MEDIA];
+} AppState;
 
-  es->current_media_idx = 0;
-  es->current_media_first_frame = 1;
-  es->current_media_ended = 0;
-  es->current_media_playing = 0;
-  es->current_media_reset = 0;
-  es->media_count = 0;
-
-  es->video_area_width = video_area_width;
-  es->video_area_height = video_area_height;
-
-  for (int i = 0; i < MAX_MEDIA_QUANTITY; i++) {
-    es->medias[i] = NULL;
-  }
-
-  return es;
-}
-
-int state_load_media(EditorState *es, char *droppedFilename) {
-  Media *m = media_alloc();
-  if (!m) {
-    return -1;
-  }
-
-  strcpy(m->filename, droppedFilename);
-
-  if (media_init(m, es->video_area_width, es->video_area_height,
-                 AV_PIX_FMT_RGBA) < 0) {
-    return -1;
-  }
-
-  es->medias[es->media_count] = m;
-  es->media_count++;
-
-  return 0;
-}
-
-void state_free(EditorState *es) {
-  for (int i = 0; i < es->media_count; i++) {
-    if (es->medias[i])
-      media_free(es->medias[i]);
-  }
-
-  free(es);
+void app_state_free(AppState *state) {
+    for (int i = 0; i < state->media_count; i++) {
+        media_free(state->medias[i]->media);
+        free(state->medias[i]);
+    }
+    free(state);
 }
 
 int main(void) {
-  const int ww = 1280;
-  const int wh = 720;
+    const char *filename = "assets/bigbuckbunny.mp4";
+    int ret;
 
-  int more_videos = 1, media_ended = 0;
-
-  InitWindow(ww, wh, "ave - Another Video Editor");
-  Rectangle video =
-      (Rectangle){.x = 100, .y = 100, .width = 700, .height = 600};
-
-  Image img = GenImageColor(video.width, video.height, BLACK);
-  ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-  Texture tex = LoadTextureFromImage(img);
-  UnloadImage(img);
-
-  int ret;
-  Media *media = media_alloc();
-
-  strcpy(media->filename, "assets/bigbuckbunny.mp4");
-  media_init(media, video.width, video.height, AV_PIX_FMT_RGBA);
-
-  SetTargetFPS(30);
-  while (!WindowShouldClose()) {
-    if (media->video_queue && fq_empty(media->video_queue)) {
-      TraceLog(LOG_INFO, "Should read more frames");
-      ret = media_read_frame(media);
-      if (ret < 0 && ret == AVERROR_EOF) {
-        media_ended = 1;
-      }
-
-      if (!media_ended)
-        media_decode_frames(media);
+    Media *media = media_alloc();
+    if (!media) {
+        printf("Failed to allocate media.\n");
+        return 1;
     }
 
-    if (!media_ended && media->video_queue) {
-      TraceLog(LOG_INFO, "Popping from the queue");
-      Node *n = fq_dequeue(media->video_queue);
+    strcpy(media->filename, filename);
 
-      if (n) {
-        TraceLog(LOG_INFO, "Updating texture");
-        UpdateTexture(tex, n->frame->data);
-      }
+    if ((ret = media_init(media, 1280, 720, AV_PIX_FMT_RGBA)) < 0) {
+        printf("Failed to initialize media: %d\n", ret);
+        media_free(media);
+        return 1;
     }
 
-    BeginDrawing();
-    ClearBackground(WHITE);
-    DrawTexture(tex, video.x, video.y, WHITE);
-    EndDrawing();
-  }
+    // Perform operations with the media
+    // For example, print media information
+    printf("Media filename: %s\n", media->filename);
+
+    while(1) {
+        if ((ret = media_read_frame(media)) < 0) {
+            if (ret == MEDIA_ERR_EOF) {
+                printf("End of file\n");
+                break;
+            } else {
+                printf("Failed to read frame: %d\n", ret);
+                break;
+            }
+        }
+
+        if ((ret = media_decode(media)) < 0) {
+            printf("Failed to decode frame: %d\n", ret);
+            break;
+        }
+
+        Node *node = fq_dequeue(media->queue);
+        if (!node) {
+            printf("Failed to dequeue frame\n");
+            break;
+        }
+
+        if (node->type == FRAME_TYPE_VIDEO) {
+            AVFrame *frame = node->frame;
+            printf("Decoded video frame: %dx%d\n", frame->width, frame->height);
+        } else {
+            AVFrame *frame = node->frame;
+            printf("Decoded audio frame: %d samples\n", frame->nb_samples);
+        }
+    }
+
+    // Free the media
+    media_free(media);
+    return 0;
 }
 
 // int main(void) {
-//   int ret;
-//   const int window_width = 1280;
-//   const int window_height = 720;
+//     int ret;
+//     const int window_width = 1280;
+//     const int window_height = 720;
 
-//   InitWindow(window_width, window_height, "ave - Another Video Editor");
+//     InitWindow(window_width, window_height, "ave - Another Video Editor");
 
-//   Rectangle videoAreaBorder =
-//                 (Rectangle){.x = (int)(window_width / 3),
-//                             .y = 10,
-//                             .width = (int)((2 * window_width) / 3) - 20,
-//                             .height = window_height - 100},
-//             videoArea = (Rectangle){.x = (int)(window_width / 3) + 2,
-//                                     .y = 12,
-//                                     .width = (int)((2 * window_width) / 3) -
-//                                     24, .height = window_height - 104},
-//             playButton =
-//                 (Rectangle){.x = (int)(window_width / 3 + window_width / 4),
-//                             .y = videoAreaBorder.height + 30,
-//                             .width = 100,
-//                             .height = 35},
-//             resetButton =
-//                 (Rectangle){.x = (int)(window_width / 3 + window_width / 4) +
-//                                  playButton.width + 10,
-//                             .y = videoAreaBorder.height + 30,
-//                             .width = 60,
-//                             .height = 35},
-//             exportButton =
-//                 (Rectangle){.x = (int)(window_width / 3 + window_width / 4) +
-//                                  resetButton.width + playButton.width + 20,
-//                             .y = videoAreaBorder.height + 30,
-//                             .width = 110,
-//                             .height = 35},
-//             mediaArea = (Rectangle){.x = 10,
-//                                     .y = 10,
-//                                     .width = (int)(window_width / 3) - 20,
-//                                     .height = window_height - 20};
+//     Rectangle videoAreaBorder =
+//                   (Rectangle){.x = (int)(window_width / 3),
+//                               .y = 10,
+//                               .width = (int)((2 * window_width) / 3) - 20,
+//                               .height = window_height - 100},
+//               videoArea =
+//                   (Rectangle){.x = (int)(window_width / 3) + 2,
+//                               .y = 12,
+//                               .width = (int)((2 * window_width) / 3) - 24,
+//                               .height = window_height - 104},
+//               playButton =
+//                   (Rectangle){.x = (int)(window_width / 3 + window_width / 4),
+//                               .y = videoAreaBorder.height + 30,
+//                               .width = 100,
+//                               .height = 35},
+//               resetButton =
+//                   (Rectangle){.x = (int)(window_width / 3 + window_width / 4) +
+//                                    playButton.width + 10,
+//                               .y = videoAreaBorder.height + 30,
+//                               .width = 60,
+//                               .height = 35},
+//               exportButton =
+//                   (Rectangle){.x = (int)(window_width / 3 + window_width / 4) +
+//                                    resetButton.width + playButton.width + 20,
+//                               .y = videoAreaBorder.height + 30,
+//                               .width = 110,
+//                               .height = 35},
+//               mediaArea = (Rectangle){.x = 10,
+//                                       .y = 10,
+//                                       .width = (int)(window_width / 3) - 20,
+//                                       .height = window_height - 20};
 
-//   Image img = GenImageColor(videoArea.width, videoArea.height, BLACK);
-//   ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-//   Texture tex = LoadTextureFromImage(img);
-//   UnloadImage(img);
+//     Image img = GenImageColor(videoArea.width, videoArea.height, BLACK);
+//     ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+//     Texture2D tex = LoadTextureFromImage(img);
+//     UnloadImage(img);
 
-//   EditorState *state = state_alloc(videoArea.width, videoArea.height);
-//   if (!state) {
-//     perror("state_alloc");
-//     exit(1);
-//   }
+//     AppState *state = (AppState *)malloc(sizeof(AppState));
+//     state->media_count = 0;
+//     state->current_media_idx = 0;
+//     state->video_area_width = videoArea.width;
+//     state->video_area_height = videoArea.height;
+//     state->video_destination_fmt = AV_PIX_FMT_RGBA;
 
-//   SetTargetFPS(30);
-//   while (!WindowShouldClose()) {
-//     if (IsFileDropped() && state->media_count + 1 <= MAX_MEDIA_QUANTITY) {
-//       FilePathList droppedFiles = LoadDroppedFiles();
-//       for (int i = 0; i < (int)droppedFiles.count; i++) {
-//         state_load_media(state, droppedFiles.paths[i]);
-//       }
+//     SetTargetFPS(30);
+//     while (!WindowShouldClose()) {
+//         if (IsFileDropped()) {
+//             TraceLog(LOG_INFO, "File dropped!");
+//             FilePathList dropped_files = LoadDroppedFiles();
+//             TraceLog(LOG_INFO, "Loaded %d files", dropped_files.count);
 
-//       UnloadDroppedFiles(droppedFiles);
-//     }
+//             for (int i = 0; i < dropped_files.count; i++) {
+//                 TraceLog(LOG_INFO, "Dropped file: %s", dropped_files.paths[i]);
 
-//     if (CheckCollisionPointRec(GetMousePosition(), playButton)) {
-//       if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-//         state->current_media_playing = !state->current_media_playing;
-//         TraceLog(LOG_INFO, "Playing: %d\n", state->current_media_playing);
-//       }
-//     }
+//                 MediaStateWrapper *media_state =
+//                     (MediaStateWrapper *)malloc(sizeof(MediaStateWrapper));
+//                 if(!media_state) {
+//                     printf("Failed to allocate media state\n");
+//                     continue;
+//                 }
 
-//     if (CheckCollisionPointRec(GetMousePosition(), resetButton)) {
-//       if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-//         state->current_media_playing = 0;
-//         state->current_media_reset = 1;
-//         state->current_media_first_frame = 1;
-//         TraceLog(LOG_INFO, "Reset: %d\n", state->current_media_reset);
-//       }
-//     }
+//                 media_state->media = media_alloc();
+//                 if(!media_state->media) {
+//                     printf("Failed to allocate media\n");
+//                     continue;
+//                 }
 
-//     if (IsKeyPressed(KEY_DOWN)) {
-//       state->current_media_idx =
-//           (state->current_media_idx + 1) % state->media_count;
-//       state->current_media_first_frame = 1;
-//       state->current_media_ended = 0;
-//     }
+//                 strcpy(media_state->media->filename, dropped_files.paths[i]);
 
-//     if (IsKeyPressed(KEY_UP)) {
-//       state->current_media_idx =
-//           (state->current_media_idx - 1) % state->media_count;
-//       state->current_media_first_frame = 1;
-//       state->current_media_ended = 0;
-//     }
+//                 if((ret = media_init(media_state->media, state->video_area_width,
+//                                      state->video_area_height,
+//                                      state->video_destination_fmt)) < 0) {
+//                     TraceLog(LOG_ERROR, "Failed to initialize media: %d", ret);
+//                     continue;
+//                 }
 
-//     if (state->current_media_playing) {
-//       Media *m = state->medias[state->current_media_idx];
+//                 media_state->is_playing = 0;
+//                 media_state->end_of_file = 0;
 
-//       // If we cant pull items from the queues (if they are non-NULL), then
-//       we call the decode functions if (m->video_queue->length == 0) {
-//         if (media_read_frame(m) < 0) {
-//           state->current_media_ended = 1;
-//           state->current_media_playing = 0;
-//           state->current_media_reset = 0;
+//                 state->medias[state->media_count] = media_state;
+//                 state->media_count++;
+//             }
+
+//             UnloadDroppedFiles(dropped_files);
 //         }
 
-//         if (media_decode_frames(m) < 0) {
-//           state->current_media_ended = 1;
-//           state->current_media_playing = 0;
-//           state->current_media_reset = 0;
+//         BeginDrawing();
+//         ClearBackground(RAYWHITE);
+
+//         DrawRectangleLinesEx(mediaArea, 2, GRAY);
+//         if (state->media_count == 0) {
+//             DrawText("Drop media files here!", mediaArea.x + 15,
+//                      mediaArea.height / 2, 25, GRAY);
+//         } else {
+//             for (int i = 0; i < state->media_count; i++) {
+//                 DrawRectangle(mediaArea.x, mediaArea.y + 35 * i,
+//                               mediaArea.width, 35,
+//                               i == state->current_media_idx
+//                                   ? SKYBLUE
+//                                   : (i % 2 == 0 ? GRAY : LIGHTGRAY));
+//                 DrawText(basename(state->medias[i]->media->filename),
+//                          mediaArea.x + 10, mediaArea.y + 35 * i, 20,
+//                          i == state->current_media_idx ? BLUE : DARKGRAY);
+//             }
 //         }
-//       }
 
-//       if (m->video_queue->length > 0) {
-//         Node *n = fq_dequeue(m->video_queue);
-//         AVFrame *frame = n->frame;
+//         DrawRectangleLinesEx(videoAreaBorder, 2, GRAY);
+//         DrawRectangleRec(videoArea, WHITE);
 
-//         Image img = {
-//             .data = frame->data[0],
-//             .width = frame->width,
-//             .height = frame->height,
-//             .mipmaps = 1,
-//             .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
-//         };
+//         DrawRectangleRec(playButton, LIGHTGRAY);
+//         DrawText("Play/Pause", playButton.x + 5, playButton.y + 10, 15, GRAY);
 
-//         UpdateTexture(tex, img.data);
+//         DrawRectangleRec(resetButton, LIGHTGRAY);
+//         DrawText("Reset", resetButton.x + 5, resetButton.y + 10, 15, GRAY);
 
-//         av_frame_free(&frame);
-//         free(n);
-//       }
+//         DrawRectangleRec(exportButton, LIGHTGRAY);
+//         DrawText("Export (.mp4)", exportButton.x + 5, exportButton.y + 10, 15,
+//                  GRAY);
+
+//         EndDrawing();
 //     }
 
-//     BeginDrawing();
-//     ClearBackground(RAYWHITE);
-
-//     DrawRectangleLinesEx(mediaArea, 2, GRAY);
-//     if (state->media_count == 0) {
-//       DrawText("Drop media files here!", mediaArea.x + 15, mediaArea.height /
-//       2,
-//                25, GRAY);
-//     } else {
-//       for (int i = 0; i < state->media_count; i++) {
-//         DrawRectangle(mediaArea.x, mediaArea.y + 35 * i, mediaArea.width, 35,
-//                       i == state->current_media_idx
-//                           ? SKYBLUE
-//                           : (i % 2 == 0 ? GRAY : LIGHTGRAY));
-//         DrawText(basename(state->medias[i]->filename), mediaArea.x + 10,
-//                  mediaArea.y + 35 * i, 20,
-//                  i == state->current_media_idx ? BLUE : DARKGRAY);
-//       }
-//     }
-
-//     DrawRectangleLinesEx(videoAreaBorder, 2, GRAY);
-//     DrawRectangleRec(videoArea, WHITE);
-
-//     if (state->current_media_ended) {
-//       DrawText("Media ended...", videoArea.x + 15, (int)(videoArea.height /
-//       2),
-//                15, GRAY);
-//     } else {
-//       DrawTexture(tex, videoArea.x, videoArea.y, WHITE);
-//     }
-
-//     DrawRectangleRec(playButton, LIGHTGRAY);
-//     DrawText("Play/Pause", playButton.x + 5, playButton.y + 10, 15, GRAY);
-
-//     DrawRectangleRec(resetButton, LIGHTGRAY);
-//     DrawText("Reset", resetButton.x + 5, resetButton.y + 10, 15, GRAY);
-
-//     DrawRectangleRec(exportButton, LIGHTGRAY);
-//     DrawText("Export (.mp4)", exportButton.x + 5, exportButton.y + 10, 15,
-//              GRAY);
-
-//     EndDrawing();
-//   }
-
-//   state_free(state);
-//   UnloadTexture(tex);
-//   CloseWindow();
+//     app_state_free(state);
+//     UnloadTexture(tex);
+//     CloseWindow();
 // }

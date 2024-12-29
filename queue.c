@@ -1,75 +1,76 @@
 #include "queue.h"
+
 #include <stdlib.h>
 
 FrameQueue *fq_alloc() {
-  FrameQueue *fq = (FrameQueue *)malloc(sizeof(FrameQueue));
-  if (!fq)
-    return NULL;
+    FrameQueue *fq = malloc(sizeof(FrameQueue));
+    if (!fq) {
+        return NULL;
+    }
 
-  fq->length = 0;
-  fq->head = NULL;
-  fq->tail = NULL;
+    fq->length = 0;
+    fq->head = NULL;
 
-  return fq;
+    return fq;
 }
 
-void fq_enqueue(FrameQueue *fq, AVFrame *frame) {
-  Node *new_node = (Node *)malloc(sizeof(Node));
-  if (!new_node) {
-    fprintf(stderr, "Failed to allocate memory for new node\n");
-    return;
-  }
+int fq_empty(FrameQueue *fq) { return fq->length == 0; }
 
-  new_node->frame = frame;
-  new_node->next = NULL;
+void fq_enqueue(FrameQueue *fq, AVFrame *frame, enum FrameType type) {
+    Node *node = malloc(sizeof(Node));
+    if (!node) {
+        return;
+    }
 
-  if (!fq->head) {
-    // Queue is empty
-    fq->head = fq->tail = new_node;
-  } else {
-    // Add to the tail
-    fq->tail->next = new_node;
-    fq->tail = new_node;
-  }
+    node->frame = frame;
+    node->type = type;
+    node->next = NULL;
 
-  fq->length++;
-  fprintf(stderr, "Enqueued frame, queue length: %d\n", fq->length);
-}
+    // This is the first element being inserted
+    if (fq_empty(fq)) {
+        fq->head = node;
+        fq->length++;
+        return;
+    }
 
-int fq_empty(FrameQueue *fq) {
-  return fq->length == 0;
+    // For all other cases, search for the last element
+    // on the list and insert the new node there
+    Node *current = fq->head;
+    while (current->next != NULL) {
+        current = current->next;
+    }
+
+    current->next = node;
+    fq->length++;
 }
 
 Node *fq_dequeue(FrameQueue *fq) {
-  if (fq_empty(fq)) {
-    fprintf(stderr, "Queue is empty, cannot dequeue\n");
-    return NULL;
-  }
+    if (fq_empty(fq)) {
+        return NULL;
+    }
 
-  Node *ret = fq->head;
-  fq->head = fq->head->next;
-  if (!fq->head)
-    fq->tail = NULL;
+    Node *node = fq->head;
+    if (node) {
+        fq->head = node->next;
+        node->next = NULL;
+        fq->length--;
+    }
 
-  fq->length--;
-  fprintf(stderr, "Dequeued frame, queue length: %d\n", fq->length);
-
-  return ret;
+    return node;
 }
 
 void fq_free(FrameQueue *fq) {
-  Node *current = fq->head;
-
-  while (current) {
-    Node *next = current->next;
-    if (current->frame) {
-      av_frame_free(&(current->frame));
+    while (!fq_empty(fq)) {
+        Node *node = fq_dequeue(fq);
+        node->next = NULL;
+        av_frame_free(&node->frame);
+        free(node);
     }
+    free(fq);
+}
 
-    free(current);
-    current = next;
-  }
-
-  free(fq);
-  fprintf(stderr, "Freed frame queue\n");
+void node_free(Node *node) {
+    node->next = NULL;
+    av_frame_free(&node->frame);
+    free(node);
 }

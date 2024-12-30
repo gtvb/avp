@@ -209,15 +209,8 @@ int media_decode(Media *media) {
                 return MEDIA_ERR_LIBAV;
             }
 
-            scaled_frame->width = media->dst_frame_w;
-            scaled_frame->height = media->dst_frame_h;
-            scaled_frame->format = media->dst_frame_fmt;
-
-            ret = av_frame_get_buffer(scaled_frame, 32);
-            if (ret < 0) {
-                fprintf(stderr,
-                        "media_decode: av_frame_get_buffer failed: %s\n",
-                        av_err2str(ret));
+            if(av_image_alloc(scaled_frame->data, scaled_frame->linesize, media->dst_frame_w, media->dst_frame_h, media->dst_frame_fmt, 1) < 0) {
+                printf("media_decode: av_image_alloc failed\n");
                 return MEDIA_ERR_LIBAV;
             }
 

@@ -28,12 +28,16 @@ int media_open_context(Media *media, enum AVMediaType type) {
         return MEDIA_ERR_INTERNAL;
     }
 
-    AVCodec *codec = NULL;
+    const AVCodec *codec = NULL;
     AVCodecParameters *codec_params = NULL;
     int stream_index = -1;
 
-    for (int i = 0; i < media->fmt_ctx->nb_streams; i++) {
+    for (int i = 0; i < (int)media->fmt_ctx->nb_streams; i++) {
         if (media->fmt_ctx->streams[i]->codecpar->codec_type == type) {
+            // Print the streams timebase
+            printf("Stream %d timebase: %f\n", i,
+                   av_q2d(media->fmt_ctx->streams[i]->time_base));
+
             codec_params = media->fmt_ctx->streams[i]->codecpar;
             stream_index = i;
             break;
@@ -106,6 +110,13 @@ int media_init(Media *media, int dst_frame_w, int dst_frame_h,
     // Try to open the audio and video contexts. If they fail, it just means
     // that this media does not contain and audio or video stream, but we can
     // keep going.
+
+    // For audio: For planar sample formats, each audio channel is in a separate
+    // data plane, and linesize is the buffer size, in bytes, for a single
+    // plane. All data planes must be the same size. For packed sample formats,
+    // only the first data plane is used, and samples for each channel are
+    // interleaved. In this case, linesize is the buffer size, in bytes, for the
+    // 1 plane.
     ret = media_open_context(media, AVMEDIA_TYPE_AUDIO);
     if (ret < 0 && ret != MEDIA_ERR_NO_STREAM) {
         return ret;
@@ -209,12 +220,14 @@ int media_decode(Media *media) {
                 return MEDIA_ERR_LIBAV;
             }
 
-            if(av_image_alloc(scaled_frame->data, scaled_frame->linesize, media->dst_frame_w, media->dst_frame_h, media->dst_frame_fmt, 1) < 0) {
+            if (av_image_alloc(scaled_frame->data, scaled_frame->linesize,
+                               media->dst_frame_w, media->dst_frame_h,
+                               media->dst_frame_fmt, 1) < 0) {
                 printf("media_decode: av_image_alloc failed\n");
                 return MEDIA_ERR_LIBAV;
             }
 
-            ret = sws_scale(media->sws_ctx, frame->data, frame->linesize, 0,
+            ret = sws_scale(media->sws_ctx, (const uint8_t * const *)frame->data, frame->linesize, 0,
                             frame->height, scaled_frame->data,
                             scaled_frame->linesize);
             if (ret < 0) {
@@ -230,6 +243,8 @@ int media_decode(Media *media) {
             fq_enqueue(media->queue, frame, FRAME_TYPE_AUDIO);
         }
     }
+
+    return 0;
 }
 
 void media_free(Media *media) {

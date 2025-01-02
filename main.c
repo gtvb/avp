@@ -19,6 +19,9 @@ typedef struct {
 
     int video_area_width, video_area_height, video_destination_fmt;
 
+    double now, elapsed;
+    int target_fps;
+
     MediaStateWrapper *medias[MAX_MEDIA];
 } AppState;
 
@@ -136,16 +139,22 @@ int main(void) {
     AppState *state = (AppState *)malloc(sizeof(AppState));
     state->media_count = 0;
     state->current_media_idx = 0;
+
     state->video_area_width = videoArea.width;
     state->video_area_height = videoArea.height;
     state->video_destination_fmt = AV_PIX_FMT_RGBA;
 
-    SetTargetFPS(30);
+    state->now = GetTime();
+    state->elapsed = 0;
+    state->target_fps = 25;
+
     while (!WindowShouldClose()) {
+        PollInputEvents();
+
         if (IsFileDropped()) {
             FilePathList dropped_files = LoadDroppedFiles();
 
-            for (int i = 0; i < dropped_files.count; i++) {
+            for (int i = 0; i < (int)dropped_files.count; i++) {
                 MediaStateWrapper *media_state =
                     (MediaStateWrapper *)malloc(sizeof(MediaStateWrapper));
                 if (!media_state) {
@@ -184,6 +193,7 @@ int main(void) {
             if (CheckCollisionPointRec(mouse, playButton)) {
                 state->medias[state->current_media_idx]->is_playing =
                     !state->medias[state->current_media_idx]->is_playing;
+                state->now = GetTime();
             } else if (CheckCollisionPointRec(mouse, resetButton)) {
                 // Seek to the beginning of the video
             } else if (CheckCollisionPointRec(mouse, exportButton)) {
@@ -220,9 +230,11 @@ int main(void) {
             if (node->type == FRAME_TYPE_VIDEO) {
                 UpdateTexture(tex, node->frame->data[0]);
             } else {
-                TraceLog(LOG_INFO, "Decoded audio frame: %d samples",
-                         node->frame->nb_samples);
+                // TraceLog(LOG_INFO, "Decoded audio frame: %d samples",
+                //          node->frame->nb_samples);
             }
+
+            node_free(node);
         }
 
         BeginDrawing();
@@ -267,6 +279,45 @@ int main(void) {
                  GRAY);
 
         EndDrawing();
+
+        SwapScreenBuffer();
+
+        state->elapsed = GetTime() - state->now;
+        if (state->media_count > 0 &&
+            state->medias[state->current_media_idx]->is_playing) {
+            Media *current_media =
+                state->medias[state->current_media_idx]->media;
+
+            int stream_index;
+            if (current_media->pkt->stream_index ==
+                current_media->video_stream_idx) {
+                stream_index = current_media->video_stream_idx;
+            } else {
+                stream_index = current_media->audio_stream_idx;
+            }
+
+            double timebase = av_q2d(
+                current_media->fmt_ctx->streams[stream_index]->time_base);
+            double pts = (double)current_media->pkt->pts;
+
+            double pts_time = timebase * pts;
+            double wait_time = pts_time - state->elapsed;
+
+            TraceLog(LOG_INFO,
+                     "Stream index: %d, Timebase: %f, PTS: %f, PTS time: %f, "
+                     "Wait time: %f, Now: %f, Elapsed: %f",
+                     stream_index, timebase, pts, pts_time, wait_time,
+                     state->now, state->elapsed);
+            if (wait_time > 0) {
+                WaitTime(wait_time);
+            }
+        } else {
+            if (state->elapsed < 1.0 / state->target_fps) {
+                WaitTime(1.0 / state->target_fps - state->elapsed);
+            }
+        }
+
+        // state->now = GetTime();
     }
 
     app_state_free(state);

@@ -7,17 +7,35 @@ Media *media_alloc() {
     }
 
     media->filename = malloc(1024 * sizeof(char));
+    media->formatted_duration = malloc(10 * sizeof(char));
+    media->formatted_position = malloc(10 * sizeof(char));
+
+    if (!media->filename || !media->formatted_duration ||
+        !media->formatted_position) {
+        free(media->filename);
+        free(media->formatted_duration);
+        free(media->formatted_position);
+        free(media);
+        return NULL;
+    }
+
     media->fmt_ctx = NULL;
     media->audio_ctx = NULL;
     media->video_ctx = NULL;
+    media->sws_ctx = NULL;
+    media->swr_ctx = NULL;
+
     media->video_stream_idx = -1;
     media->audio_stream_idx = -1;
-    media->sws_ctx = NULL;
+
     media->dst_frame_w = 0;
     media->dst_frame_h = 0;
     media->dst_frame_fmt = AV_PIX_FMT_NONE;
+
     media->pkt = NULL;
     media->queue = NULL;
+
+    media->position = 0;
 
     return media;
 }
@@ -34,10 +52,6 @@ int media_open_context(Media *media, enum AVMediaType type) {
 
     for (int i = 0; i < (int)media->fmt_ctx->nb_streams; i++) {
         if (media->fmt_ctx->streams[i]->codecpar->codec_type == type) {
-            // Print the streams timebase
-            printf("Stream %d timebase: %f\n", i,
-                   av_q2d(media->fmt_ctx->streams[i]->time_base));
-
             codec_params = media->fmt_ctx->streams[i]->codecpar;
             stream_index = i;
             break;
@@ -139,6 +153,44 @@ int media_init(Media *media, int dst_frame_w, int dst_frame_h,
         }
     }
 
+    if (media->audio_ctx) {
+        SwrContext *swr = swr_alloc();
+        if (!swr) {
+            printf("media_init: swr_alloc failed\n");
+            return MEDIA_ERR_LIBAV;
+        }
+
+        AVChannelLayout in_ch_layout;
+        if (av_channel_layout_copy(&in_ch_layout,
+                                   &media->audio_ctx->ch_layout) < 0) {
+            printf("media_init: av_channel_layout_copy failed\n");
+            return MEDIA_ERR_LIBAV;
+        }
+
+        ret = swr_alloc_set_opts2(
+            &swr,
+            &(AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO,  // out_ch_layout
+            AV_SAMPLE_FMT_FLT,                           // out_sample_fmt
+            media->audio_ctx->sample_rate,               // out_sample_rate
+            &in_ch_layout,                               // in_ch_layout
+            media->audio_ctx->sample_fmt,                // in_sample_fmt
+            media->audio_ctx->sample_rate,               // in_sample_rate
+            0,                                           // log_offset
+            NULL);                                       // log_ctx
+
+        if (ret < 0) {
+            printf("media_init: swr_alloc_set_opts2 failed\n");
+            return MEDIA_ERR_LIBAV;
+        }
+
+        if (swr_init(swr) < 0) {
+            printf("media_init: swr_init failed\n");
+            return MEDIA_ERR_LIBAV;
+        }
+
+        media->swr_ctx = swr;
+    }
+
     media->dst_frame_w = dst_frame_w;
     media->dst_frame_h = dst_frame_h;
     media->dst_frame_fmt = dst_frame_fmt;
@@ -148,6 +200,10 @@ int media_init(Media *media, int dst_frame_w, int dst_frame_h,
         printf("media_init: av_packet_alloc failed\n");
         return MEDIA_ERR_LIBAV;
     }
+
+    // Set the duration of the stream here.
+    media_get_formatted_time(media, media->fmt_ctx->duration, AV_TIME_BASE,
+                             media->formatted_duration);
 
     return 0;
 }
@@ -166,6 +222,24 @@ int media_read_frame(Media *media) {
         }
         printf("media_read_frame: av_read_frame failed: %s\n", av_err2str(ret));
         return MEDIA_ERR_LIBAV;
+    }
+
+    // Update the position at container scale
+    media->position = media->pkt->pts;
+
+    int64_t timebase;
+    if (media->pkt->stream_index == media->video_stream_idx) {
+        timebase =
+            media->fmt_ctx->streams[media->video_stream_idx]->time_base.den;
+    } else {
+        timebase =
+            media->fmt_ctx->streams[media->audio_stream_idx]->time_base.den;
+    }
+
+    if (media_get_formatted_time(media, media->position, timebase,
+                                 media->formatted_position) < 0) {
+        printf("media_read_frame: media_get_formatted_time failed\n");
+        return MEDIA_ERR_INTERNAL;
     }
 
     return 0;
@@ -204,15 +278,22 @@ int media_decode(Media *media) {
 
         // Receive the decoded frames (or frame).
         ret = avcodec_receive_frame(codec_ctx, frame);
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-            break;
+        if (ret == AVERROR(EAGAIN)) {
+            printf("media_decode: avcodec_receive_frame returned EAGAIN: %s\n",
+                   av_err2str(ret));
+            av_frame_free(&frame);
+            return MEDIA_ERR_MORE_DATA;
+        } else if (ret == AVERROR_EOF) {
+            printf("media_decode: avcodec_receive_frame returned EOF: %s\n",
+                   av_err2str(ret));
+            av_frame_free(&frame);
+            return MEDIA_ERR_EOF;
         } else if (ret < 0) {
             printf("media_decode: avcodec_receive_frame failed: %s\n",
                    av_err2str(ret));
             return MEDIA_ERR_LIBAV;
         }
 
-        // If we are decoding video, we need to scale the frame.
         if (is_video) {
             AVFrame *scaled_frame = av_frame_alloc();
             if (!scaled_frame) {
@@ -227,9 +308,9 @@ int media_decode(Media *media) {
                 return MEDIA_ERR_LIBAV;
             }
 
-            ret = sws_scale(media->sws_ctx, (const uint8_t * const *)frame->data, frame->linesize, 0,
-                            frame->height, scaled_frame->data,
-                            scaled_frame->linesize);
+            ret = sws_scale(media->sws_ctx, (const uint8_t *const *)frame->data,
+                            frame->linesize, 0, frame->height,
+                            scaled_frame->data, scaled_frame->linesize);
             if (ret < 0) {
                 printf("media_decode: sws_scale failed\n");
                 return MEDIA_ERR_LIBAV;
@@ -240,6 +321,37 @@ int media_decode(Media *media) {
 
             fq_enqueue(media->queue, frame, FRAME_TYPE_VIDEO);
         } else {
+            AVFrame *converted_frame = av_frame_alloc();
+            if (!converted_frame) {
+                printf("media_decode: av_frame_alloc failed\n");
+                return MEDIA_ERR_LIBAV;
+            }
+
+            converted_frame->format = AV_SAMPLE_FMT_FLT;
+            converted_frame->sample_rate = media->audio_ctx->sample_rate;
+            converted_frame->nb_samples = frame->nb_samples;
+
+            av_channel_layout_default(&converted_frame->ch_layout, 2);
+
+            if ((ret = av_frame_get_buffer(converted_frame, 0)) < 0) {
+                printf("media_decode: av_frame_get_buffer failed: %s\n",
+                       av_err2str(ret));
+                return MEDIA_ERR_LIBAV;
+            }
+
+            ret = swr_convert(media->swr_ctx, converted_frame->data,
+                              converted_frame->nb_samples,
+                              (const uint8_t **)frame->data, frame->nb_samples);
+
+            if (ret < 0) {
+                printf("media_decode: swr_convert failed\n");
+                return MEDIA_ERR_LIBAV;
+            }
+
+            av_frame_copy_props(converted_frame, frame);
+            av_frame_free(&frame);
+            frame = converted_frame;
+
             fq_enqueue(media->queue, frame, FRAME_TYPE_AUDIO);
         }
     }
@@ -247,9 +359,71 @@ int media_decode(Media *media) {
     return 0;
 }
 
+int media_seek(Media *media, int64_t incr, enum SeekDirection direction) {
+    if (!media) {
+        printf("media_seek: media is NULL\n");
+        return MEDIA_ERR_INTERNAL;
+    }
+
+    int flags = 0;
+    if (direction == SEEK_BACKWARD) {
+        flags |= AVSEEK_FLAG_BACKWARD;
+    }
+
+    int stream_index;
+    if (media->pkt->stream_index == media->video_stream_idx) {
+        stream_index = media->video_stream_idx;
+    } else {
+        stream_index = media->audio_stream_idx;
+    }
+
+    int64_t timestamp = media->position + incr > 0 ? media->position + incr : 0;
+    media->position = timestamp;
+
+    int64_t target =
+        av_rescale_q(timestamp, AV_TIME_BASE_Q,
+                     media->fmt_ctx->streams[stream_index]->time_base);
+
+    int ret =
+        av_seek_frame(media->fmt_ctx, media->video_stream_idx, target, flags);
+    if (ret < 0) {
+        printf("media_seek: av_seek_frame failed: %s\n", av_err2str(ret));
+        return MEDIA_ERR_LIBAV;
+    }
+
+    avcodec_flush_buffers(media->video_ctx);
+    avcodec_flush_buffers(media->audio_ctx);
+
+    return 0;
+}
+
+int media_get_formatted_time(Media *media, int64_t timestamp, int64_t timebase,
+                             char *formatted_time) {
+    if (!media) {
+        printf("media_get_formatted_time: media is NULL\n");
+        return -1;
+    }
+
+    int64_t seconds = timestamp / timebase;
+    int64_t minutes = seconds / 60;
+    int64_t hours = minutes / 60;
+
+    snprintf(formatted_time, 10, "%02lld:%02lld:%02lld", hours, minutes % 60,
+             seconds % 60);
+    return 0;
+}
+
 void media_free(Media *media) {
     if (!media) {
         return;
+    }
+
+    if (media->formatted_duration) {
+        free(media->formatted_duration);
+    }
+
+    if (media->formatted_position) {
+        free(media->formatted_position);
     }
 
     if (media->fmt_ctx) {
@@ -266,6 +440,10 @@ void media_free(Media *media) {
 
     if (media->sws_ctx) {
         sws_freeContext(media->sws_ctx);
+    }
+
+    if (media->swr_ctx) {
+        swr_free(&media->swr_ctx);
     }
 
     if (media->pkt) {

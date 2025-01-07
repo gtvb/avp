@@ -11,6 +11,9 @@ typedef struct {
     int is_playing;
     int end_of_file;
     Media *media;
+
+    Texture2D texture;
+    AudioStream audio;
 } MediaStateWrapper;
 
 typedef struct {
@@ -23,18 +26,20 @@ typedef struct {
     int target_fps;
 
     MediaStateWrapper *medias[MAX_MEDIA];
-} AppState;
+} GuiState;
 
-void app_state_free(AppState *state) {
+void app_state_free(GuiState *state) {
     for (int i = 0; i < state->media_count; i++) {
         media_free(state->medias[i]->media);
+        UnloadTexture(state->medias[i]->texture);
+        UnloadAudioStream(state->medias[i]->audio);
         free(state->medias[i]);
     }
     free(state);
 }
 
 // int main(void) {
-//     const char *filename = "assets/bigbuckbunny.mp4";
+//     const char *filename = "assets/casa_monstro.mp4";
 //     int ret;
 
 //     Media *media = media_alloc();
@@ -55,7 +60,7 @@ void app_state_free(AppState *state) {
 //     // For example, print media information
 //     printf("Media filename: %s\n", media->filename);
 
-//     while(1) {
+//     while (1) {
 //         if ((ret = media_read_frame(media)) < 0) {
 //             if (ret == MEDIA_ERR_EOF) {
 //                 printf("End of file\n");
@@ -66,13 +71,21 @@ void app_state_free(AppState *state) {
 //             }
 //         }
 
-//         if ((ret = media_decode(media)) < 0) {
+//         if ((ret = media_decode(media)) < 0 && ret != MEDIA_ERR_MORE_DATA) {
+//             if(ret == MEDIA_ERR_EOF) {
+//                 break;
+//             }
+
 //             printf("Failed to decode frame: %d\n", ret);
 //             break;
 //         }
 
+//         if(fq_empty(media->queue) && ret == MEDIA_ERR_MORE_DATA) {
+//             continue;
+//         }
+
 //         Node *node = fq_dequeue(media->queue);
-//         if (!node) {
+//         if (!node && ret != MEDIA_ERR_MORE_DATA) {
 //             printf("Failed to dequeue frame\n");
 //             break;
 //         }
@@ -98,6 +111,7 @@ int main(void) {
     const int window_height = 720;
 
     InitWindow(window_width, window_height, "ave - Another Video Editor");
+    InitAudioDevice();
 
     Rectangle videoAreaBorder =
                   (Rectangle){.x = (int)(window_width / 3),
@@ -109,6 +123,11 @@ int main(void) {
                               .y = 12,
                               .width = (int)((2 * window_width) / 3) - 24,
                               .height = window_height - 104},
+              videoProgressArea =
+                  (Rectangle){.x = videoArea.x,
+                              .y = videoArea.y + videoArea.height,
+                              .width = videoArea.width,
+                              .height = 30},
               playButton =
                   (Rectangle){.x = (int)(window_width / 3 + window_width / 4),
                               .y = videoAreaBorder.height + 30,
@@ -131,12 +150,7 @@ int main(void) {
                                       .width = (int)(window_width / 3) - 20,
                                       .height = window_height - 20};
 
-    Image img = GenImageColor(videoArea.width, videoArea.height, BLACK);
-    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    Texture2D tex = LoadTextureFromImage(img);
-    UnloadImage(img);
-
-    AppState *state = (AppState *)malloc(sizeof(AppState));
+    GuiState *state = (GuiState *)malloc(sizeof(GuiState));
     state->media_count = 0;
     state->current_media_idx = 0;
 
@@ -181,6 +195,25 @@ int main(void) {
                 media_state->is_playing = 0;
                 media_state->end_of_file = 0;
 
+                // Load the texture for this media. The Image is just a way to
+                // create a texture with a specific size without having to fill
+                // it with data that does not yet exist.
+                Image img =
+                    GenImageColor(videoArea.width, videoArea.height, BLACK);
+                ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+                Texture2D tex = LoadTextureFromImage(img);
+                UnloadImage(img);
+
+                // This is the audio stream for the media
+                AudioStream audio = LoadAudioStream(
+                    media_state->media->audio_ctx->sample_rate, 32, 2);
+
+                SetAudioStreamVolume(audio, 1.0f);
+                PlayAudioStream(audio);
+
+                media_state->texture = tex;
+                media_state->audio = audio;
+
                 state->medias[state->media_count] = media_state;
                 state->media_count++;
             }
@@ -194,11 +227,33 @@ int main(void) {
                 state->medias[state->current_media_idx]->is_playing =
                     !state->medias[state->current_media_idx]->is_playing;
                 state->now = GetTime();
+
+                if (state->medias[state->current_media_idx]->is_playing) {
+                    ResumeAudioStream(
+                        state->medias[state->current_media_idx]->audio);
+                } else {
+                    PauseAudioStream(
+                        state->medias[state->current_media_idx]->audio);
+                }
             } else if (CheckCollisionPointRec(mouse, resetButton)) {
                 // Seek to the beginning of the video
+                if ((ret = media_seek(
+                         state->medias[state->current_media_idx]->media, -9999,
+                         SEEK_BACKWARD)) < 0) {
+                    TraceLog(LOG_ERROR, "Failed to seek: %d", ret);
+                }
+
+                state->medias[state->current_media_idx]->is_playing = 0;
+                state->medias[state->current_media_idx]->end_of_file = 0;
             } else if (CheckCollisionPointRec(mouse, exportButton)) {
                 // Export video
             }
+        }
+
+        if(IsKeyPressed(KEY_DOWN) && state->media_count > 0) {
+            state->current_media_idx = (state->current_media_idx + 1) % state->media_count;
+        } else if(IsKeyPressed(KEY_UP) && state->media_count > 0) {
+            state->current_media_idx = (state->current_media_idx - 1) % state->media_count;
         }
 
         if (state->media_count > 0 &&
@@ -216,9 +271,15 @@ int main(void) {
                 }
             }
 
-            if ((ret = media_decode(media_state->media)) < 0) {
+            if ((ret = media_decode(media_state->media)) < 0 &&
+                ret != MEDIA_ERR_MORE_DATA) {
                 TraceLog(LOG_ERROR, "Failed to decode frame: %d", ret);
                 break;
+            }
+
+            if (fq_empty(media_state->media->queue) &&
+                ret == MEDIA_ERR_MORE_DATA) {
+                continue;
             }
 
             Node *node = fq_dequeue(media_state->media->queue);
@@ -228,10 +289,12 @@ int main(void) {
             }
 
             if (node->type == FRAME_TYPE_VIDEO) {
-                UpdateTexture(tex, node->frame->data[0]);
+                UpdateTexture(media_state->texture, node->frame->data[0]);
             } else {
-                // TraceLog(LOG_INFO, "Decoded audio frame: %d samples",
-                //          node->frame->nb_samples);
+                if (IsAudioStreamProcessed(media_state->audio)) {
+                    UpdateAudioStream(media_state->audio, node->frame->data[0],
+                                      node->frame->nb_samples);
+                }
             }
 
             node_free(node);
@@ -264,8 +327,24 @@ int main(void) {
             state->medias[state->current_media_idx]->end_of_file) {
             DrawText("End of file", videoArea.x + 10, videoArea.y + 10, 20,
                      RED);
-        } else {
-            DrawTexture(tex, videoArea.x, videoArea.y, WHITE);
+        } else if (state->media_count > 0) {
+            DrawTexture(state->medias[state->current_media_idx]->texture,
+                        videoArea.x, videoArea.y, WHITE);
+
+            // Draw to texts, one at the beggining, that in the furutre will
+            // indicate the current time (later on). The second, on the otehr
+            // tip of the video area, will indicate the total time of the video.
+            Media *current_media =
+                state->medias[state->current_media_idx]->media;
+
+            // Draw the current position at one tip of the video progress area,
+            // and the video duration at the other tip.
+            DrawText(current_media->formatted_position,
+                     videoProgressArea.x + 10, videoProgressArea.y + 5, 20,
+                     GRAY);
+            DrawText(current_media->formatted_duration,
+                     videoProgressArea.x + videoProgressArea.width - 100,
+                     videoProgressArea.y + 5, 20, GRAY);
         }
 
         DrawRectangleRec(playButton, LIGHTGRAY);
@@ -279,7 +358,6 @@ int main(void) {
                  GRAY);
 
         EndDrawing();
-
         SwapScreenBuffer();
 
         state->elapsed = GetTime() - state->now;
@@ -303,11 +381,6 @@ int main(void) {
             double pts_time = timebase * pts;
             double wait_time = pts_time - state->elapsed;
 
-            TraceLog(LOG_INFO,
-                     "Stream index: %d, Timebase: %f, PTS: %f, PTS time: %f, "
-                     "Wait time: %f, Now: %f, Elapsed: %f",
-                     stream_index, timebase, pts, pts_time, wait_time,
-                     state->now, state->elapsed);
             if (wait_time > 0) {
                 WaitTime(wait_time);
             }
@@ -316,11 +389,9 @@ int main(void) {
                 WaitTime(1.0 / state->target_fps - state->elapsed);
             }
         }
-
-        // state->now = GetTime();
     }
 
     app_state_free(state);
-    UnloadTexture(tex);
+    CloseAudioDevice();
     CloseWindow();
 }

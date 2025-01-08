@@ -96,11 +96,13 @@ int media_open_context(Media *media, enum AVMediaType type) {
 }
 
 int media_init(Media *media, int dst_frame_w, int dst_frame_h,
-               enum AVPixelFormat dst_frame_fmt) {
+               enum AVPixelFormat dst_frame_fmt, const char *filename) {
     if (!media) {
         printf("media_init: media is NULL\n");
         return MEDIA_ERR_INTERNAL;
     }
+
+    strcpy(media->filename, filename);
 
     int ret = avformat_open_input(&media->fmt_ctx, media->filename, NULL, NULL);
     if (ret < 0) {

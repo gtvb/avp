@@ -62,7 +62,7 @@ Media *media_alloc();
 
 int media_open_context(Media *media, enum AVMediaType type);
 int media_init(Media *media, int dst_frame_w, int dst_frame_h,
-               enum AVPixelFormat dst_frame_fmt);
+               enum AVPixelFormat dst_frame_fmt, const char *filename);
 
 // Sends the packet to the decoder appropriate.
 int media_read_frame(Media *media);

@@ -1,10 +1,17 @@
 #ifndef GUI_H
 #define GUI_H
 
-#include "raylib.h"
 #include "media.h"
+#include "raylib.h"
 
 #define MAX_MEDIA 10
+#define WINDOW_WIDTH 1280
+#define WINDOW_HEIGHT 720
+
+typedef enum {
+    GUI_STATE_MARKER_START,
+    GUI_STATE_MARKER_END,
+} GuiStateMarker;
 
 typedef struct {
     int is_playing;
@@ -19,6 +26,13 @@ typedef struct {
     AudioStream audio;
 } MediaStateWrapper;
 
+
+// Layout definition
+typedef struct {
+    Rectangle videoAreaBorder, videoArea, videoProgressArea, playButton,
+        resetButton, exportButton, mediaArea;
+} GuiLayout;
+
 typedef struct {
     int media_count;
     int current_media_idx;
@@ -30,25 +44,38 @@ typedef struct {
     double now, elapsed;
     int target_fps;
 
+    GuiLayout layout;
     MediaStateWrapper *medias[MAX_MEDIA];
 } GuiState;
 
+void init_layout(GuiLayout *layout);
+
+// Media state related functions
 MediaStateWrapper *media_state_wrapper_alloc();
+
+int media_state_wrapper_init(MediaStateWrapper *media_state, int dst_frame_w,
+                             int dst_frame_h, enum AVPixelFormat dst_frame_fmt, const char *filename);
+void media_state_wrapper_free(MediaStateWrapper *media_state);
+
+// Gui state related functions
 GuiState *gui_state_alloc();
 
-int gui_state_init(GuiState *state, int video_area_width, int video_area_height,
-                   int video_destination_fmt);
+void gui_state_init(GuiState *state);
 
-int gui_state_add_media(GuiState *state, const char *filename);
-int gui_state_remove_media(GuiState *state, int idx);
+void gui_state_load_media(GuiState *state, const char *filename);
+int gui_state_remove_media(GuiState *state);
+void gui_state_play_media(GuiState *state);
+void gui_state_reset_media(GuiState *state);
+void gui_state_add_marker(GuiState *state, GuiStateMarker marker_type);
 
-int gui_state_add_marker(GuiState *state, int media_idx, int64_t timestamp);
-int gui_state_remove_marker(GuiState *state, int media_idx, int marker_idx);
+void gui_state_media_down(GuiState *state);
+void gui_state_media_up(GuiState *state);
 
-int gui_state_playback(GuiState *state);
+int gui_state_update(GuiState *state);
+void gui_state_draw(GuiState *state);
 
+void gui_state_run(GuiState *state);
 
 void gui_state_free(GuiState *state);
 
-
-#endif // GUI_H
+#endif  // GUI_H

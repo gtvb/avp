@@ -3,8 +3,8 @@
 
 #include "media.h"
 #include "raylib.h"
+#include "common.h"
 
-#define MAX_MEDIA 10
 #define WINDOW_WIDTH 1280
 #define WINDOW_HEIGHT 720
 
@@ -53,9 +53,9 @@ void init_layout(GuiLayout *layout);
 // Media state related functions
 MediaStateWrapper *media_state_wrapper_alloc();
 
-int media_state_wrapper_init(MediaStateWrapper *media_state, int dst_frame_w,
+int media_state_init(MediaStateWrapper *media_state, int dst_frame_w,
                              int dst_frame_h, enum AVPixelFormat dst_frame_fmt, const char *filename);
-void media_state_wrapper_free(MediaStateWrapper *media_state);
+void media_state_free(MediaStateWrapper *media_state);
 
 // Gui state related functions
 GuiState *gui_state_alloc();

@@ -250,8 +250,6 @@ int gui_state_update(GuiState *state) {
             gui_state_play_media(state);
         } else if (CheckCollisionPointRec(mouse, state->layout.resetButton)) {
             gui_state_reset_media(state);
-        } else if (CheckCollisionPointRec(mouse, state->layout.exportButton)) {
-            // Export video
         }
     }
 
@@ -355,18 +353,21 @@ void gui_state_draw(GuiState *state) {
     }
 
     DrawRectangleRec(state->layout.playButton, LIGHTGRAY);
-    DrawText("Play/Pause", state->layout.playButton.x + 5, state->layout.playButton.y + 10, 15, GRAY);
+    if(state->media_count > 0 && state->medias[state->current_media_idx]->is_playing) {
+        DrawRectangle(state->layout.playButton.x + 5, state->layout.playButton.y + 5, 10, 25, GRAY);
+        DrawRectangle(state->layout.playButton.x + 20, state->layout.playButton.y + 5, 10, 25, GRAY);
+    } else {
+        DrawTriangle((Vector2){state->layout.playButton.x + 5, state->layout.playButton.y + 5},
+                     (Vector2){state->layout.playButton.x + 5, state->layout.playButton.y + 30},
+                     (Vector2){state->layout.playButton.x + 30, state->layout.playButton.y + 17}, GRAY);
+    }
 
     DrawRectangleRec(state->layout.resetButton, LIGHTGRAY);
     DrawText("Reset", state->layout.resetButton.x + 5, state->layout.resetButton.y + 10, 15, GRAY);
-
-    DrawRectangleRec(state->layout.exportButton, LIGHTGRAY);
-    DrawText("Export (.mp4)", state->layout.exportButton.x + 5, state->layout.exportButton.y + 10, 15,
-             GRAY);
 }
 
 void gui_state_run(GuiState *state) {
-    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Ave");
+    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "AVP - Another Video Player");
     InitAudioDevice();
 
     while (!WindowShouldClose()) {

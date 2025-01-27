@@ -281,18 +281,12 @@ int media_decode(Media *media) {
         // Receive the decoded frames (or frame).
         ret = avcodec_receive_frame(codec_ctx, frame);
         if (ret == AVERROR(EAGAIN)) {
-            printf("media_decode: avcodec_receive_frame returned EAGAIN: %s\n",
-                   av_err2str(ret));
             av_frame_free(&frame);
             return MEDIA_ERR_MORE_DATA;
         } else if (ret == AVERROR_EOF) {
-            printf("media_decode: avcodec_receive_frame returned EOF: %s\n",
-                   av_err2str(ret));
             av_frame_free(&frame);
             return MEDIA_ERR_EOF;
         } else if (ret < 0) {
-            printf("media_decode: avcodec_receive_frame failed: %s\n",
-                   av_err2str(ret));
             return MEDIA_ERR_LIBAV;
         }
 
@@ -420,41 +414,23 @@ void media_free(Media *media) {
         return;
     }
 
-    if (media->formatted_duration) {
-        free(media->formatted_duration);
-    }
+    free(media->formatted_duration);
+    free(media->formatted_position);
 
-    if (media->formatted_position) {
-        free(media->formatted_position);
-    }
-
-    if (media->fmt_ctx) {
-        avformat_close_input(&media->fmt_ctx);
-    }
+    avformat_close_input(&media->fmt_ctx);
 
     if (media->audio_ctx) {
         avcodec_free_context(&media->audio_ctx);
+        swr_free(&media->swr_ctx);
     }
 
     if (media->video_ctx) {
         avcodec_free_context(&media->video_ctx);
-    }
-
-    if (media->sws_ctx) {
         sws_freeContext(media->sws_ctx);
     }
 
-    if (media->swr_ctx) {
-        swr_free(&media->swr_ctx);
-    }
-
-    if (media->pkt) {
-        av_packet_free(&media->pkt);
-    }
-
-    if (media->queue) {
-        fq_free(media->queue);
-    }
+    av_packet_free(&media->pkt);
+    fq_free(media->queue);
 
     free(media->filename);
     free(media);

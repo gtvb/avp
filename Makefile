@@ -1,4 +1,4 @@
-NAME := ave
+NAME := avp
 
 CC := gcc
 CFLAGS := -I/opt/homebrew/include -I./raylib/raylib-5.5/src -Wall -Wextra
